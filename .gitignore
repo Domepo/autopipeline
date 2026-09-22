@@ -1,0 +1,9 @@
+node_modules/
+dist/
+apps/web/dist/
+.data/
+.local-data/
+.sites-runtime/
+*.log
+.DS_Store
+coverage/
