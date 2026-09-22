@@ -1,0 +1,56 @@
+{
+  "name": "autosecurecloud",
+  "version": "1.0.0",
+  "license": "Unlicense",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "setup": "playwright install chromium && tsx apps/server/src/setup.ts",
+    "dev": "concurrently -k -n SERVER,WEB -c blue,cyan \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "tsx watch apps/server/src/index.ts",
+    "dev:web": "vite --config apps/web/vite.config.ts",
+    "build": "npm run typecheck && vite build --config apps/web/vite.config.ts",
+    "start": "NODE_ENV=production tsx apps/server/src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "fixture": "tsx apps/server/src/fixture.ts"
+  },
+  "dependencies": {
+    "@fastify/cors": "11.3.0",
+    "@fastify/multipart": "10.1.1",
+    "@fastify/static": "10.1.4",
+    "@fastify/websocket": "11.3.1",
+    "ag-grid-community": "^36.2.0",
+    "ag-grid-react": "^36.2.0",
+    "better-sqlite3": "13.0.3",
+    "exceljs": "4.4.0",
+    "fastify": "5.12.5",
+    "lucide-react": "1.47.0",
+    "playwright": "1.63.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "26.6.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "concurrently": "10.0.5",
+    "tailwindcss": "^4.3.3",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "vite": "8.3.0",
+    "vitest": "4.1.11"
+  },
+  "overrides": {
+    "uuid": "11.1.1"
+  }
+}
