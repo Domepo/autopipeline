@@ -9,7 +9,7 @@ import { visualizerClientScript } from './browser-scripts.ts'
 import { describeLocator, resolveLocator, resolveLocatorAll, resolveLocatorInMatchingContainer, resolveLocatorWithin } from './locator.ts'
 import { expandPipelineCalls } from './pipeline-expansion.ts'
 import { createMergedAtv } from './atv-merge.ts'
-import { launchChromium } from './browser.ts'
+import { httpCredentialsForUrl, launchChromium } from './browser.ts'
 
 type Emit = (event: SocketEvent) => void
 type FailureAction = 'retry' | 'skip' | 'stop'
@@ -147,7 +147,13 @@ export class RunnerService {
       this.updateRun(runId, { status: 'running', currentDeviceId: device.id, currentStep: 0, error: null })
       this.log(runId, { deviceId: device.id, level: 'info', message: `Gerät „${device.name}“ wird geöffnet.` })
       browser = await launchChromium()
-      context = await browser.newContext({ acceptDownloads: true, ignoreHTTPSErrors: device.ignoreHttpsErrors })
+      const credential = device.credentialId ? this.db.getCredential(device.credentialId, true) : undefined
+      const httpCredentials = httpCredentialsForUrl(device.baseUrl, credential)
+      context = await browser.newContext({
+        acceptDownloads: true,
+        ignoreHTTPSErrors: device.ignoreHttpsErrors,
+        ...(httpCredentials ? { httpCredentials } : {}),
+      })
       await context.addInitScript({ content: visualizerClientScript })
       page = await context.newPage()
       context.on('page', async (newPage) => { page = newPage; await newPage.bringToFront().catch(() => {}) })

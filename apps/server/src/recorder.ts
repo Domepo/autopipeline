@@ -9,7 +9,7 @@ import { appDb, type AppDatabase } from './database.ts'
 import { recorderClientScript, visualizerClientScript } from './browser-scripts.ts'
 import { resolveLocator, resolveLocatorInMatchingContainer } from './locator.ts'
 import { createMergedAtv } from './atv-merge.ts'
-import { launchChromium } from './browser.ts'
+import { httpCredentialsForUrl, launchChromium } from './browser.ts'
 
 type Emit = (event: SocketEvent) => void
 type RecorderPayload = {
@@ -52,7 +52,13 @@ export class RecorderService {
     if (!url) throw new Error('Bitte ein Gerät oder eine Start-URL auswählen.')
 
     this.browser = await launchChromium()
-    this.context = await this.browser.newContext({ acceptDownloads: true, ignoreHTTPSErrors: input.ignoreHttpsErrors ?? device?.ignoreHttpsErrors ?? false })
+    const credential = device?.credentialId ? this.db.getCredential(device.credentialId, true) : undefined
+    const httpCredentials = httpCredentialsForUrl(url, credential)
+    this.context = await this.browser.newContext({
+      acceptDownloads: true,
+      ignoreHTTPSErrors: input.ignoreHttpsErrors ?? device?.ignoreHttpsErrors ?? false,
+      ...(httpCredentials ? { httpCredentials } : {}),
+    })
     await this.enableRecording(this.context, input.pipelineId)
     const page = await this.context.newPage()
     this.attachPage(page, input.pipelineId)
@@ -74,6 +80,11 @@ export class RecorderService {
       await this.stop()
       const message = error instanceof Error ? error.message : String(error)
       if (/ERR_CERT_|CERT_AUTHORITY_INVALID/i.test(message)) throw new Error('Das HTTPS-Zertifikat wird nicht vertraut. Aktiviere beim Aufnahmestart „Selbstsigniertes Zertifikat zulassen“ und starte die Aufnahme erneut.')
+      if (/ERR_(INVALID|MISSING)_AUTH_CREDENTIALS/i.test(message)) {
+        throw new Error(device?.credentialId
+          ? 'Die HTTP-Anmeldung der Startseite hat das zugewiesene Zugangsdatenprofil abgelehnt. Prüfe Benutzername und Passwort am Gerät sowie einen möglichen Authentifizierungs-Proxy in WSL.'
+          : 'Die Startseite verlangt eine HTTP-Anmeldung. Weise dem Gerät ein Zugangsdatenprofil zu und starte die Aufnahme erneut. Prüfe in WSL außerdem einen möglichen Authentifizierungs-Proxy.')
+      }
       throw new Error(`Die Startseite konnte nicht geöffnet werden: ${message}`)
     }
   }
@@ -87,7 +98,13 @@ export class RecorderService {
     if (!Number.isInteger(input.afterStepIndex) || input.afterStepIndex < 0 || input.afterStepIndex >= pipeline.steps.length) throw new Error('Der gewählte Schritt ist nicht mehr vorhanden.')
 
     this.browser = await launchChromium()
-    this.context = await this.browser.newContext({ acceptDownloads: true, ignoreHTTPSErrors: device.ignoreHttpsErrors })
+    const credential = device.credentialId ? this.db.getCredential(device.credentialId, true) : undefined
+    const httpCredentials = httpCredentialsForUrl(device.baseUrl, credential)
+    this.context = await this.browser.newContext({
+      acceptDownloads: true,
+      ignoreHTTPSErrors: device.ignoreHttpsErrors,
+      ...(httpCredentials ? { httpCredentials } : {}),
+    })
     await this.context.addInitScript({ content: visualizerClientScript })
     const page = await this.context.newPage()
     this.temporaryDirectory = mkdtempSync(join(tmpdir(), 'asc-recording-'))

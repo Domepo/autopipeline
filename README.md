@@ -41,6 +41,8 @@ npm start
 
 Die Datei muss für den Benutzer, unter dem AutoSecureCloud läuft, ausführbar sein. Falls nötig: `chmod +x /home/benutzer/chrome-linux64/chrome`. Da Aufnahmen und Abläufe ein sichtbares Browserfenster öffnen, braucht der Prozess außerdem Zugriff auf eine grafische Linux-Sitzung, beispielsweise über die gesetzte Variable `DISPLAY`.
 
+Verlangt die Startseite bereits vor dem Laden eine HTTP-Anmeldung, muss dem Gerät in AutoSecureCloud ein Zugangsdatenprofil zugewiesen sein. Dieses Profil wird für HTTP Basic/Digest nur an den exakten Ursprung der Start-URL übermittelt. Bei `ERR_INVALID_AUTH_CREDENTIALS` Benutzername und Passwort prüfen; in WSL kann außerdem ein Authentifizierungs-Proxy die Ursache sein.
+
 ## Erster Ablauf
 
 1. Unter **Inventar** ein Zielgerät oder ein Portal mit seiner Start-URL anlegen.
