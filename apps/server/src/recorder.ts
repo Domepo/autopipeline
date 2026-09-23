@@ -1,4 +1,4 @@
-import { chromium, type Browser, type BrowserContext, type Locator, type Page } from 'playwright'
+import type { Browser, BrowserContext, Locator, Page } from 'playwright'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { basename, join } from 'node:path'
@@ -9,6 +9,7 @@ import { appDb, type AppDatabase } from './database.ts'
 import { recorderClientScript, visualizerClientScript } from './browser-scripts.ts'
 import { resolveLocator, resolveLocatorInMatchingContainer } from './locator.ts'
 import { createMergedAtv } from './atv-merge.ts'
+import { launchChromium } from './browser.ts'
 
 type Emit = (event: SocketEvent) => void
 type RecorderPayload = {
@@ -50,7 +51,7 @@ export class RecorderService {
     const url = input.url || device?.baseUrl
     if (!url) throw new Error('Bitte ein Gerät oder eine Start-URL auswählen.')
 
-    this.browser = await chromium.launch({ headless: false })
+    this.browser = await launchChromium()
     this.context = await this.browser.newContext({ acceptDownloads: true, ignoreHTTPSErrors: input.ignoreHttpsErrors ?? device?.ignoreHttpsErrors ?? false })
     await this.enableRecording(this.context, input.pipelineId)
     const page = await this.context.newPage()
@@ -85,7 +86,7 @@ export class RecorderService {
     if (!device) throw new Error('Bitte ein Gerät auswählen.')
     if (!Number.isInteger(input.afterStepIndex) || input.afterStepIndex < 0 || input.afterStepIndex >= pipeline.steps.length) throw new Error('Der gewählte Schritt ist nicht mehr vorhanden.')
 
-    this.browser = await chromium.launch({ headless: false })
+    this.browser = await launchChromium()
     this.context = await this.browser.newContext({ acceptDownloads: true, ignoreHTTPSErrors: device.ignoreHttpsErrors })
     await this.context.addInitScript({ content: visualizerClientScript })
     const page = await this.context.newPage()

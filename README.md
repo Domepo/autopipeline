@@ -21,6 +21,26 @@ npm start
 
 Dann läuft die vollständige Anwendung unter `http://127.0.0.1:4310`.
 
+### Manuell bereitgestelltes Chromium unter Linux
+
+Wenn Chromium bereits manuell auf den Rechner kopiert wurde, kann AutoSecureCloud diese ausführbare Datei anstelle des von Playwright heruntergeladenen Browsers verwenden. Der Pfad muss auf die Datei `chrome` zeigen, nicht nur auf den Ordner `chrome-linux64`:
+
+```bash
+npm install
+export PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/home/benutzer/chrome-linux64/chrome
+npm run setup:external-browser
+npm run dev:lan
+```
+
+Die Variable muss auch beim späteren Start gesetzt sein. Für einen Produktionsstart gilt entsprechend:
+
+```bash
+export PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/home/benutzer/chrome-linux64/chrome
+npm start
+```
+
+Die Datei muss für den Benutzer, unter dem AutoSecureCloud läuft, ausführbar sein. Falls nötig: `chmod +x /home/benutzer/chrome-linux64/chrome`. Da Aufnahmen und Abläufe ein sichtbares Browserfenster öffnen, braucht der Prozess außerdem Zugriff auf eine grafische Linux-Sitzung, beispielsweise über die gesetzte Variable `DISPLAY`.
+
 ## Erster Ablauf
 
 1. Unter **Inventar** ein Zielgerät oder ein Portal mit seiner Start-URL anlegen.

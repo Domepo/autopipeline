@@ -1,4 +1,4 @@
-import { chromium, type Browser, type BrowserContext, type Locator, type Page } from 'playwright'
+import type { Browser, BrowserContext, Locator, Page } from 'playwright'
 import { copyFileSync, existsSync, unlinkSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -9,6 +9,7 @@ import { visualizerClientScript } from './browser-scripts.ts'
 import { describeLocator, resolveLocator, resolveLocatorAll, resolveLocatorInMatchingContainer, resolveLocatorWithin } from './locator.ts'
 import { expandPipelineCalls } from './pipeline-expansion.ts'
 import { createMergedAtv } from './atv-merge.ts'
+import { launchChromium } from './browser.ts'
 
 type Emit = (event: SocketEvent) => void
 type FailureAction = 'retry' | 'skip' | 'stop'
@@ -145,7 +146,7 @@ export class RunnerService {
     try {
       this.updateRun(runId, { status: 'running', currentDeviceId: device.id, currentStep: 0, error: null })
       this.log(runId, { deviceId: device.id, level: 'info', message: `Gerät „${device.name}“ wird geöffnet.` })
-      browser = await chromium.launch({ headless: false })
+      browser = await launchChromium()
       context = await browser.newContext({ acceptDownloads: true, ignoreHTTPSErrors: device.ignoreHttpsErrors })
       await context.addInitScript({ content: visualizerClientScript })
       page = await context.newPage()
