@@ -12,7 +12,7 @@ npm run setup
 npm run dev
 ```
 
-Die Entwicklungsoberfläche ist anschließend unter `http://127.0.0.1:5173` erreichbar. Für den lokalen Produktionsbetrieb:
+Die Entwicklungsoberfläche ist anschließend unter `http://127.0.0.1:5173` erreichbar. Für den Zugriff von anderen Geräten im vertrauenswürdigen lokalen Netz den Server stattdessen mit `npm run dev:lan` starten und die lokale IPv4-Adresse des Rechners verwenden, zum Beispiel `http://192.168.2.176:5173`. Bei einer Änderung der Rechner-IP den Entwicklungsserver neu starten. Für den lokalen Produktionsbetrieb:
 
 ```bash
 npm run build
@@ -60,7 +60,7 @@ Aufgenommene Ziele können im Schritteditor nachträglich Variablen enthalten. S
 
 ## Daten und Sicherheit
 
-Die produktiven Daten liegen unter `~/.autosecurecloud/`. Mit `ASC_DATA_DIR=/anderer/pfad` lässt sich der Speicherort ändern. Der Server bindet nur an `127.0.0.1`.
+Die produktiven Daten liegen unter `~/.autosecurecloud/`. Mit `ASC_DATA_DIR=/anderer/pfad` lässt sich der Speicherort ändern. Die API bindet weiterhin nur an `127.0.0.1`; im optionalen LAN-Modus leitet Vite Anfragen von der lokalen IPv4-Adresse an sie weiter. Damit ist die Anwendung samt Zugangsdaten und Backups ohne Anmeldung für andere Geräte im selben Netz erreichbar. `dev:lan` nur in einem vertrauenswürdigen Netz starten; für entfernten Zugriff ist eine abgesicherte Verbindung mit Anmeldung erforderlich.
 
 Wie für Version 1 festgelegt, werden Passwörter unverschlüsselt in der lokalen SQLite-Datei gespeichert. Die Oberfläche und Laufprotokolle zeigen sie nicht an. Die Datenbank sollte nicht geteilt oder in eine ungeschützte Cloud-Synchronisation gelegt werden.
 

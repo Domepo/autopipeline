@@ -4,6 +4,7 @@ import websocket from '@fastify/websocket'
 import multipart from '@fastify/multipart'
 import fastifyStatic from '@fastify/static'
 import { createReadStream, existsSync } from 'node:fs'
+import { networkInterfaces } from 'node:os'
 import { resolve } from 'node:path'
 import type { SocketEvent } from '@autosecure/shared'
 import { appDb } from './database.ts'
@@ -13,19 +14,33 @@ import { RunnerService } from './runner.ts'
 import { host, isProduction, port } from './config.ts'
 
 const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info' } })
-await app.register(cors, { origin: ['http://127.0.0.1:5173', 'http://localhost:5173'] })
-await app.register(websocket)
-await app.register(multipart, { limits: { fileSize: 20 * 1024 * 1024, files: 1 } })
-
 const allowedOrigins = new Set([
   `http://127.0.0.1:${port}`,
   `http://localhost:${port}`,
   'http://127.0.0.1:5173',
   'http://localhost:5173',
 ])
+const allowedHosts = new Set(['127.0.0.1', 'localhost'])
+if (!isProduction && process.env.ASC_DEV_LAN === '1') {
+  for (const addresses of Object.values(networkInterfaces())) {
+    for (const address of addresses ?? []) {
+      if (address.family !== 'IPv4' || address.internal ||
+        !/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(address.address)) continue
+      allowedHosts.add(address.address)
+      allowedOrigins.add(`http://${address.address}:5173`)
+    }
+  }
+}
+const allowedRequestHosts = new Set(
+  [...allowedHosts].flatMap((hostname) => [`${hostname}:${port}`, `${hostname}:5173`]),
+)
+await app.register(cors, { origin: [...allowedOrigins] })
+await app.register(websocket)
+await app.register(multipart, { limits: { fileSize: 20 * 1024 * 1024, files: 1 } })
+
 app.addHook('onRequest', async (request, reply) => {
   const requestHost = request.headers.host ?? ''
-  if (!/^(127\.0\.0\.1|localhost)(:\d{1,5})?$/.test(requestHost)) {
+  if (!allowedRequestHosts.has(requestHost)) {
     return reply.code(403).send({ message: 'Ungültiger Host.' })
   }
   const origin = request.headers.origin

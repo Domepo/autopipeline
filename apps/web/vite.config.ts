@@ -13,8 +13,9 @@ export default defineConfig({
     },
   },
   server: {
-    host: '127.0.0.1',
+    host: process.env.ASC_DEV_LAN === '1' ? '0.0.0.0' : '127.0.0.1',
     port: 5173,
+    strictPort: true,
     proxy: {
       '/api': 'http://127.0.0.1:4310',
       '/fixture': 'http://127.0.0.1:4310',
