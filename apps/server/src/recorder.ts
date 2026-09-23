@@ -3,11 +3,12 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { tmpdir } from 'node:os'
-import type { Device, Pipeline, PipelineStep, RecordingStatus, SocketEvent, ValueSource } from '@autosecure/shared'
+import type { Device, DownloadMatchSource, LocatorSpec, Pipeline, PipelineStep, RecordingStatus, SocketEvent, ValueSource } from '@autosecure/shared'
 import { speedDelay, stepNames } from '@autosecure/shared'
 import { appDb, type AppDatabase } from './database.ts'
 import { recorderClientScript, visualizerClientScript } from './browser-scripts.ts'
-import { resolveLocator } from './locator.ts'
+import { resolveLocator, resolveLocatorInMatchingContainer } from './locator.ts'
+import { createMergedAtv } from './atv-merge.ts'
 
 type Emit = (event: SocketEvent) => void
 type RecorderPayload = {
@@ -35,9 +36,13 @@ export class RecorderService {
 
   constructor(private db: AppDatabase = appDb, private emit: Emit = () => {}) {}
 
+  private actionTimeout(step: PipelineStep) { return step.timeoutMs ?? this.db.getSettings().actionTimeoutMs }
+  private navigationTimeout(step: PipelineStep) { return step.timeoutMs ?? this.db.getSettings().navigationTimeoutMs }
+  private downloadTimeout(step: PipelineStep) { return step.timeoutMs ?? this.db.getSettings().downloadTimeoutMs }
+
   status() { return this.current ?? null }
 
-  async start(input: { pipelineId: string; deviceId?: string; url?: string }) {
+  async start(input: { pipelineId: string; deviceId?: string; url?: string; ignoreHttpsErrors?: boolean }) {
     await this.stop()
     const pipeline = this.db.getPipeline(input.pipelineId)
     if (!pipeline) throw new Error('Pipeline nicht gefunden.')
@@ -46,7 +51,7 @@ export class RecorderService {
     if (!url) throw new Error('Bitte ein Gerät oder eine Start-URL auswählen.')
 
     this.browser = await chromium.launch({ headless: false })
-    this.context = await this.browser.newContext({ acceptDownloads: true, ignoreHTTPSErrors: device?.ignoreHttpsErrors ?? false })
+    this.context = await this.browser.newContext({ acceptDownloads: true, ignoreHTTPSErrors: input.ignoreHttpsErrors ?? device?.ignoreHttpsErrors ?? false })
     await this.enableRecording(this.context, input.pipelineId)
     const page = await this.context.newPage()
     this.attachPage(page, input.pipelineId)
@@ -56,11 +61,20 @@ export class RecorderService {
     this.emit({ type: 'recording.status', recording: this.current })
     const step: PipelineStep = { id: randomUUID(), type: 'navigate', label: 'Startseite öffnen', url: { type: 'literal', value: url } }
     this.saveStep(input.pipelineId, step)
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45_000 })
-    await page.bringToFront()
-    this.current = { ...this.current, phase: 'recording' }
-    this.emit({ type: 'recording.status', recording: this.current })
-    return this.current
+    try {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: this.db.getSettings().navigationTimeoutMs })
+      await page.bringToFront()
+      this.current = { ...this.current, phase: 'recording' }
+      this.emit({ type: 'recording.status', recording: this.current })
+      return this.current
+    } catch (error) {
+      const reverted = this.db.updatePipeline(input.pipelineId, { steps: pipeline.steps })
+      if (reverted) this.emit({ type: 'pipeline.updated', pipeline: reverted })
+      await this.stop()
+      const message = error instanceof Error ? error.message : String(error)
+      if (/ERR_CERT_|CERT_AUTHORITY_INVALID/i.test(message)) throw new Error('Das HTTPS-Zertifikat wird nicht vertraut. Aktiviere beim Aufnahmestart „Selbstsigniertes Zertifikat zulassen“ und starte die Aufnahme erneut.')
+      throw new Error(`Die Startseite konnte nicht geöffnet werden: ${message}`)
+    }
   }
 
   async continueFrom(input: { pipelineId: string; deviceId: string; afterStepIndex: number }) {
@@ -156,7 +170,15 @@ export class RecorderService {
       const locator = last && last.type === 'click' ? last.locator : undefined
       if (!locator) return
       const suggested = download.suggestedFilename()
-      const step: PipelineStep = { id: randomUUID(), type: 'download', label: `Download: ${suggested}`, locator, artifactKey: suggested.replace(/\.[^.]+$/, '').replace(/\W+/g, '_') || 'download' }
+      const recentInput = this.lastRecordedIndex == null ? undefined : pipeline?.steps
+        .slice(Math.max(0, this.lastRecordedIndex - 3), this.lastRecordedIndex)
+        .reverse()
+        .find((candidate) => (candidate.type === 'fill' || candidate.type === 'select') && candidate.value.type !== 'credentialField')
+      const step: PipelineStep = {
+        id: randomUUID(), type: 'download', label: `Download: ${suggested}`, locator,
+        artifactKey: suggested.replace(/\.[^.]+$/, '').replace(/\W+/g, '_') || 'download',
+        match: recentInput ? { source: { type: 'stepValue', stepId: recentInput.id }, containerSelector: 'tr' } : undefined,
+      }
       const updated = this.lastRecordedIndex == null ? undefined : this.db.replacePipelineStep(pipelineId, this.lastRecordedIndex, step)
       if (updated) this.emit({ type: 'pipeline.updated', pipeline: updated })
     })
@@ -196,7 +218,7 @@ export class RecorderService {
         this.current = { ...this.current, mode: 'record' }
         this.emit({ type: 'recording.status', recording: this.current })
       } break
-      case 'upload': if (payload.locator) step = { id, type: 'upload', label: `Datei hochladen${payload.filename ? `: ${payload.filename}` : ''}`, locator: payload.locator, file: { type: 'localFile', path: '' } }; break
+      case 'upload': if (payload.locator) step = { id, type: 'upload', label: `Datei hochladen${payload.filename ? `: ${payload.filename}` : ''}`, locator: payload.locator, file: { type: 'dataFile', key: '' } }; break
     }
     if (!step) return
     this.saveStep(pipelineId, step)
@@ -211,40 +233,93 @@ export class RecorderService {
     this.emit({ type: 'pipeline.updated', pipeline: updated })
   }
 
-  private async replayStep(input: { pipeline: Pipeline; device: Device; page: Page; context: BrowserContext; step: PipelineStep; index: number; values: Record<string, string> }) {
+  private async replayStep(input: { pipeline: Pipeline; device: Device; page: Page; context: BrowserContext; step: PipelineStep; index: number; values: Record<string, string>; callStack?: string[] }) {
     const { pipeline, device, step, index, values, context } = input
     const page = input.page
-    page.setDefaultTimeout(step.timeoutMs ?? 15_000)
-    page.setDefaultNavigationTimeout(step.timeoutMs ?? 45_000)
+    const callStack = input.callStack ?? [pipeline.id]
+    page.setDefaultTimeout(this.actionTimeout(step))
+    page.setDefaultNavigationTimeout(this.navigationTimeout(step))
     const wait = speedDelay[pipeline.speed]
     const info = { action: step.type, device: device.name, index, total: this.current?.replayTotal ?? input.index + 1, label: step.label || stepNames[step.type] }
     if (step.type === 'navigate') {
       await this.visualize(page, page.locator('body'), info)
       await this.delay(wait)
-      await page.goto(this.interpolate(await this.resolveValue(step.url, device, values), device, values), { waitUntil: 'domcontentloaded', timeout: step.timeoutMs ?? 45_000 })
+      await page.goto(this.interpolate(await this.resolveValue(step.url, device, values), device, values), { waitUntil: 'domcontentloaded', timeout: this.navigationTimeout(step) })
       return
     }
-    const spec = 'locator' in step ? step.locator : undefined
-    const locator = spec ? await resolveLocator(page, spec) : undefined
+    if (step.type === 'runPipelines') {
+      if (!step.pipelineIds.length) throw new Error('Im Zwischenablauf wurde keine Automation ausgewählt.')
+      await this.visualize(page, page.locator('body'), { ...info, action: 'waiting', label: 'Hauptautomation pausieren …' })
+      const existing = new Set(context.pages())
+      const nestedPage = await context.newPage()
+      const currentUrl = page.url()
+      if (/^https?:/i.test(currentUrl)) await nestedPage.goto(currentUrl, { waitUntil: 'domcontentloaded', timeout: this.navigationTimeout(step) })
+      try {
+        for (const pipelineId of step.pipelineIds) {
+          if (callStack.includes(pipelineId)) throw new Error('Dieser Zwischenablauf enthält einen gegenseitigen Aufruf.')
+          const nested = this.db.getPipeline(pipelineId)
+          if (!nested) throw new Error(`Eingebettete Automation nicht gefunden: ${pipelineId}`)
+          for (let nestedIndex = 0; nestedIndex < nested.steps.length; nestedIndex++) {
+            const activeNestedPage = [...context.pages()].reverse().find((candidate) => !existing.has(candidate) && !candidate.isClosed()) ?? nestedPage
+            await this.replayStep({ pipeline: nested, device, page: activeNestedPage, context, step: nested.steps[nestedIndex], index: nestedIndex, values, callStack: [...callStack, pipelineId] })
+          }
+        }
+      } finally {
+        for (const candidate of context.pages()) if (!existing.has(candidate)) await candidate.close().catch(() => {})
+        await page.bringToFront()
+      }
+      return
+    }
+    if (step.type === 'beginSubflow' || step.type === 'endSubflow') throw new Error('Interne Zwischenablauf-Schritte können nicht aufgenommen werden.')
+    if (step.type === 'discoverDevices') throw new Error('Nach einer Gerätesuche kann die Aufnahme nicht mitten im Lauf fortgesetzt werden. Starte dafür eine neue Pipeline.')
+    if (step.type === 'mergeAtv') {
+      if (!this.temporaryDirectory) throw new Error('Für den ATV-Merge fehlt das temporäre Aufnahmeverzeichnis.')
+      await this.visualize(page, page.locator('body'), info)
+      const merged = createMergedAtv(step, (file) => file.type === 'localFile'
+        ? this.interpolate(file.path, device, values)
+        : (values[file.key] && existsSync(values[file.key]) ? values[file.key] : '') || (file.type === 'dataFile'
+          ? this.db.getDeviceFile(device.id, file.key)?.path
+          : this.db.findLatestArtifactByKey(device.id, file.key)?.path) || '', this.temporaryDirectory)
+      values[merged.outputKey] = merged.path
+      return
+    }
+    const spec = 'locator' in step && step.locator ? this.interpolateLocator(step.locator, device, values) : undefined
+    if (spec) await this.visualize(page, page.locator('body'), { ...info, action: 'waiting', label: `Warte auf ${info.label} …` })
+    const locator = spec
+      ? step.type === 'download' && step.match
+        ? await resolveLocatorInMatchingContainer(page, spec, await this.resolveDownloadMatch(step.match.source, pipeline, device, values), step.match.containerSelector)
+        : await resolveLocator(page, spec)
+      : undefined
     if (locator) { await locator.scrollIntoViewIfNeeded(); await this.visualize(page, locator, info) }
     else await this.visualize(page, page.locator('body'), info)
     await this.delay(wait)
     switch (step.type) {
-      case 'click': await locator!.click({ timeout: step.timeoutMs ?? 15_000 }); break
+      case 'click': await locator!.click({ timeout: this.actionTimeout(step) }); break
       case 'fill': await locator!.fill(await this.resolveValue(step.value, device, values)); break
       case 'select': await locator!.selectOption(await this.resolveValue(step.value, device, values)); break
       case 'toggle': await locator!.setChecked(step.checked); break
-      case 'press': if (locator) await locator.press(step.key); else await page.keyboard.press(step.key); break
+      case 'press': {
+        // Keep replayed login submissions from hanging while a target appliance
+        // performs its own navigation. The next replayed step waits for its
+        // target on the resulting page.
+        if (locator) await locator.focus()
+        await page.keyboard.press(step.key)
+        break
+      }
       case 'extractText': values[step.key] = (await locator!.innerText()).trim(); break
-      case 'waitFor': if (locator) await locator.waitFor({ state: 'visible', timeout: step.timeoutMs ?? 15_000 }); else await this.delay(step.milliseconds ?? 1000); break
+      case 'waitFor': if (locator) await locator.waitFor({ state: 'visible', timeout: this.actionTimeout(step) }); else await this.delay(step.milliseconds ?? 1000); break
       case 'download': {
-        const [download] = await Promise.all([page.waitForEvent('download', { timeout: step.timeoutMs ?? 60_000 }), locator!.click()])
+        const [download] = await Promise.all([page.waitForEvent('download', { timeout: this.downloadTimeout(step) }), locator!.click()])
         const target = join(this.temporaryDirectory!, `${step.artifactKey}__${basename(download.suggestedFilename())}`)
         await download.saveAs(target); values[step.artifactKey] = target
         break
       }
       case 'upload': {
-        const path = step.file.type === 'localFile' ? this.interpolate(step.file.path, device, values) : values[step.file.key] || ''
+        const path = step.file.type === 'localFile'
+          ? this.interpolate(step.file.path, device, values)
+          : (values[step.file.key] && existsSync(values[step.file.key]) ? values[step.file.key] : '') || (step.file.type === 'dataFile'
+            ? this.db.getDeviceFile(device.id, step.file.key)?.path
+            : this.db.findLatestArtifactByKey(device.id, step.file.key)?.path) || ''
         if (!path || !existsSync(path)) throw new Error(`Upload-Datei nicht gefunden: ${path || ('key' in step.file ? step.file.key : step.file.path)}`)
         await locator!.setInputFiles(path)
         break
@@ -262,6 +337,13 @@ export class RecorderService {
     return source.field === 'password' ? credential.password ?? '' : credential.username
   }
 
+  private async resolveDownloadMatch(source: DownloadMatchSource, pipeline: Pipeline, device: Device, values: Record<string, string>) {
+    if (source.type !== 'stepValue') return this.resolveValue(source, device, values)
+    const referenced = pipeline.steps.find((step) => step.id === source.stepId)
+    if (!referenced || (referenced.type !== 'fill' && referenced.type !== 'select')) throw new Error('Der verknüpfte Eingabeschritt für den Download wurde nicht gefunden.')
+    return this.resolveValue(referenced.value, device, values)
+  }
+
   private interpolate(value: string, device: Device, values: Record<string, string>) {
     return value.replace(/\{\{\s*([^}]+)\s*\}\}/g, (_match, rawKey: string) => {
       const key = rawKey.trim()
@@ -271,6 +353,18 @@ export class RecorderService {
       if (key.startsWith('result.')) return values[key.slice(7)] ?? ''
       return values[key] ?? ''
     })
+  }
+
+  private interpolateLocator(spec: LocatorSpec, device: Device, values: Record<string, string>): LocatorSpec {
+    return {
+      ...spec,
+      description: spec.description ? this.interpolate(spec.description, device, values) : undefined,
+      candidates: spec.candidates.map((candidate) => ({
+        ...candidate,
+        value: this.interpolate(candidate.value, device, values),
+        name: candidate.name ? this.interpolate(candidate.name, device, values) : undefined,
+      })),
+    }
   }
 
   private async visualize(page: Page, locator: Locator, info: Record<string, unknown>) {

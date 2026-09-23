@@ -71,6 +71,17 @@ export const recorderClientScript = String.raw`
   const emit = (payload) => {
     if (typeof window.__ascEmit === 'function') window.__ascEmit(payload).catch(() => {});
   };
+  const recordedValues = new WeakMap();
+  const recordEditableValue = (el) => {
+    if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) return false;
+    const inputType = el instanceof HTMLInputElement ? (el.type || 'text').toLowerCase() : 'textarea';
+    if (!['text','email','password','number','search','url','tel','date','time','datetime-local','textarea'].includes(inputType)) return false;
+    const signature = inputType + ':' + el.value;
+    if (recordedValues.get(el) === signature) return true;
+    recordedValues.set(el, signature);
+    emit({ type: 'fill', locator: locatorFor(el), value: inputType === 'password' ? '' : el.value, password: inputType === 'password', label: accessibleName(el) });
+    return true;
+  };
   const target = (event) => event.target instanceof Element ? event.target.closest('button,a,input,textarea,select,[role="button"],[role="link"],[role="checkbox"],[contenteditable="true"]') || event.target : null;
 
   document.addEventListener('click', (event) => {
@@ -97,12 +108,16 @@ export const recorderClientScript = String.raw`
     if (el instanceof HTMLSelectElement) emit({ type: 'select', locator, value: el.value, label: accessibleName(el) });
     else if (el.type === 'checkbox' || el.type === 'radio') emit({ type: 'toggle', locator, checked: el.checked, label: accessibleName(el) });
     else if (el.type === 'file') emit({ type: 'upload', locator, filename: el.files && el.files[0] ? el.files[0].name : '', label: accessibleName(el) });
-    else emit({ type: 'fill', locator, value: el.type === 'password' ? '' : el.value, password: el.type === 'password', label: accessibleName(el) });
+    else recordEditableValue(el);
   }, true);
 
   document.addEventListener('keydown', (event) => {
     if (window.__ascRecorderMode !== 'record' || !['Enter', 'Escape', 'Tab'].includes(event.key)) return;
     const el = target(event);
+    // The change event fires after keydown. Without flushing first, a recorded login
+    // becomes "Enter, then fill password" and submits an empty password.
+    // Remembering the value prevents the later change event from duplicating it.
+    if (el && (event.key === 'Enter' || event.key === 'Tab')) recordEditableValue(el);
     emit({ type: 'press', locator: el ? locatorFor(el) : undefined, key: event.key, label: el ? accessibleName(el) : event.key });
   }, true);
 
@@ -126,7 +141,7 @@ export const visualizerClientScript = String.raw`
     if (!host.isConnected) document.documentElement.appendChild(host);
     layer.replaceChildren();
     const rect = element && element.getBoundingClientRect ? element.getBoundingClientRect() : null;
-    if (rect) {
+    if (rect && info.action !== 'waiting') {
       const box = document.createElement('div'); box.className = 'box';
       box.style.left = (rect.left - 4) + 'px'; box.style.top = (rect.top - 4) + 'px'; box.style.width = (rect.width + 8) + 'px'; box.style.height = (rect.height + 8) + 'px';
       layer.appendChild(box);

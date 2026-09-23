@@ -7,3 +7,4 @@ export const host = '127.0.0.1'
 export const dataDirectory = resolve(process.env.ASC_DATA_DIR ?? join(homedir(), '.autosecurecloud'))
 export const databasePath = join(dataDirectory, 'autosecurecloud.db')
 export const artifactsDirectory = join(dataDirectory, 'artifacts')
+export const backupsDirectory = join(dataDirectory, 'backups')

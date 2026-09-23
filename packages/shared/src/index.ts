@@ -1,5 +1,33 @@
 export type PlaybackSpeed = 'slow' | 'normal' | 'fast'
 export type RunStatus = 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'stopped' | 'interrupted'
+
+export interface AppSettings {
+  title: string
+  subtitle: string
+  logoUrl: string | null
+  storagePath: string
+  actionTimeoutMs: number
+  navigationTimeoutMs: number
+  downloadTimeoutMs: number
+  automaticBackupInterval: 'off' | 'daily' | 'weekly'
+  automaticBackupRetention: number
+  lastAutomaticBackupAt: string | null
+  automaticBackupError: string | null
+  backupDirectory: string
+}
+
+export interface AutomaticBackup {
+  name: string
+  createdAt: string
+  size: number
+}
+
+export interface WorkbookImportPreview {
+  created: number
+  updated: number
+  rows: Array<{ name: string; action: 'create' | 'update'; changes: string[] }>
+  warnings: string[]
+}
 export type LocatorKind = 'role' | 'label' | 'testId' | 'placeholder' | 'text' | 'css'
 
 export interface LocatorCandidate {
@@ -16,13 +44,41 @@ export interface LocatorSpec {
   description?: string
 }
 
+export interface DiscoveryCollectionLevel {
+  id: string
+  label: string
+  items: LocatorSpec
+  itemLabel?: LocatorSpec
+  open?: LocatorSpec
+  leave: { type: 'back' } | { type: 'click'; locator: LocatorSpec }
+}
+
+export interface DiscoveryField {
+  key: string
+  label: string
+  locator: LocatorSpec
+  required?: boolean
+}
+
+export interface DiscoveryRecordConfig {
+  items: LocatorSpec
+  name: LocatorSpec
+  open: LocatorSpec
+  afterOpen: LocatorSpec[]
+  fields: DiscoveryField[]
+  close?: LocatorSpec
+}
+
 export type ValueSource =
   | { type: 'literal'; value: string }
   | { type: 'deviceField'; key: string }
   | { type: 'credentialField'; field: 'username' | 'password'; credentialId?: string }
   | { type: 'runValue'; key: string }
 
+export type DownloadMatchSource = ValueSource | { type: 'stepValue'; stepId: string }
+
 export type FileSource =
+  | { type: 'dataFile'; key: string }
   | { type: 'retainedArtifact'; key: string }
   | { type: 'localFile'; path: string }
 
@@ -42,8 +98,29 @@ export type PipelineStep =
   | (BaseStep & { type: 'press'; locator?: LocatorSpec; key: string })
   | (BaseStep & { type: 'extractText'; locator: LocatorSpec; key: string; persist: boolean })
   | (BaseStep & { type: 'waitFor'; locator?: LocatorSpec; milliseconds?: number })
-  | (BaseStep & { type: 'download'; locator: LocatorSpec; artifactKey: string })
+  | (BaseStep & {
+      type: 'download'
+      locator: LocatorSpec
+      artifactKey: string
+      match?: { source: DownloadMatchSource; containerSelector?: string }
+    })
   | (BaseStep & { type: 'upload'; locator: LocatorSpec; file: FileSource })
+  | (BaseStep & { type: 'mergeAtv'; first: FileSource; second: FileSource; outputKey: string; outputName: string })
+  | (BaseStep & { type: 'runPipelines'; pipelineIds: string[] })
+  | (BaseStep & { type: 'beginSubflow'; pipelineName: string })
+  | (BaseStep & { type: 'endSubflow'; pipelineName: string })
+  | (BaseStep & {
+      type: 'discoverDevices'
+      sourceDeviceId?: string
+      collections: DiscoveryCollectionLevel[]
+      record: DiscoveryRecordConfig
+      addressKey: string
+      requiredTypeKey?: string
+      requiredTypeValue?: string
+      baseUrlTemplate: string
+      duplicatePolicy: 'firstWins' | 'lastWins'
+      apply: boolean
+    })
 
 export interface Credential {
   id: string
@@ -68,7 +145,7 @@ export interface Device {
   updatedAt: string
 }
 
-export type DataFieldType = 'text' | 'number' | 'date' | 'url'
+export type DataFieldType = 'text' | 'number' | 'date' | 'url' | 'file'
 
 export interface DataField {
   id: string
@@ -91,6 +168,15 @@ export interface Pipeline {
   updatedAt: string
 }
 
+export interface PipelineGroup {
+  id: string
+  name: string
+  description: string
+  pipelineIds: string[]
+  createdAt: string
+  updatedAt: string
+}
+
 export interface PipelineStage {
   pipelineId: string
   name: string
@@ -102,6 +188,8 @@ export interface Artifact {
   runId: string
   deviceId?: string
   stepIndex?: number
+  artifactKey?: string
+  runName?: string
   name: string
   kind: 'download' | 'screenshot' | 'other'
   mimeType?: string
@@ -141,6 +229,9 @@ export interface Run {
 
 export type SocketEvent =
   | { type: 'snapshot'; recording: RecordingStatus | null }
+  | { type: 'workspace.restored' }
+  | { type: 'workspace.cleared' }
+  | { type: 'data.changed' }
   | { type: 'pipeline.updated'; pipeline: Pipeline }
   | { type: 'device.updated'; device: Device }
   | { type: 'recording.status'; recording: RecordingStatus | null }
@@ -181,4 +272,9 @@ export const stepNames: Record<PipelineStep['type'], string> = {
   waitFor: 'Warten',
   download: 'Datei herunterladen',
   upload: 'Datei hochladen',
+  mergeAtv: 'ATV-Dateien zusammenführen',
+  runPipelines: 'Zwischenablauf ausführen',
+  beginSubflow: 'Zwischenablauf starten',
+  endSubflow: 'Hauptablauf fortsetzen',
+  discoverDevices: 'Geräte entdecken',
 }
